@@ -1,11 +1,19 @@
-import lancedb
-from lancedb.pydantic import Vector, LanceModel
 import modal
-import srsly
-from itertools import islice
-from sentence_transformers import SentenceTransformer
 
 n_arxiv = 67140
+
+stub = modal.Stub("example-get-started")
+image = (modal.Image.debian_slim()
+         .pip_install("sentence_transformers", "srsly", "lancedb", "polars", "pysbd")
+         .run_commands("python -c 'from sentence_transformers import SentenceTransformer; tfm = SentenceTransformer(\"all-MiniLM-L6-v2\")'"))
+
+with image.imports():
+    import lancedb
+    from lancedb.pydantic import Vector, LanceModel
+    import srsly
+    from itertools import islice
+    from typing import Dict
+    from sentence_transformers import SentenceTransformer
 
 
 def batched(iterable, n=10):
@@ -17,21 +25,15 @@ def batched(iterable, n=10):
             return
         yield batch
 
-
-stub = modal.Stub("example-get-started")
-image = (modal.Image.debian_slim()
-         .pip_install("sentence_transformers", "srsly", "lancedb", "polars", "pysbd")
-         .run_commands("python -c 'from sentence_transformers import SentenceTransformer; tfm = SentenceTransformer(\"all-MiniLM-L6-v2\")'"))
-
 def add_vectors(batches, tfm, col):
         for batch in batches:
             vectors = fetch_vectors.remote(batch, tfm, col)
-            yield [{"vector": vec, **ex} for ex, vec in zip(batch, vectors)]
+            yield [{"vector": vec, "text": ex["text"], "url": ex["meta"]["url"]} for ex, vec in zip(batch, vectors)]
 
 class Sentence(LanceModel):
-    vector: Vector(368)
+    vector: Vector(384)
     text: str
-    meta: dict
+    url: str
     
 @stub.function(image=image, gpu="any")
 def fetch_vectors(batch, tfm, col):
@@ -43,10 +45,10 @@ def fetch_vectors(batch, tfm, col):
 def main():
     db = lancedb.connect("./.lancedb")
 
-    model = "tomaarsen/mpnet-base-nli-matryoshka"
+    model = "all-MiniLM-L6-v2"
     batch_size = 10_000
 
-    batches = batched(srsly.load_jsonl("sentences.jsonl"), n=batch_size)
+    batches = batched(srsly.read_jsonl("datasets/sentences.jsonl"), n=batch_size)
     with_vecs = add_vectors(batches, model, col="text")
 
     batch = next(with_vecs)
